@@ -9,15 +9,18 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.*;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
@@ -33,6 +36,8 @@ public class SimpleHttpClient {
     private final Future<Boolean> downloadJob;
     private final IConnectionSecurityManager connectionSecurityManager;
     private final List<String> excludedModIds;
+    
+    private byte[] challenge;
 
     public SimpleHttpClient(final ClientSidedPackHandler packHandler, final IConnectionSecurityManager connectionSecurityManager, final List<String> excludedModIds) {
         this.outputDir = packHandler.getServerModsDir();
@@ -47,6 +52,7 @@ public class SimpleHttpClient {
 
     private boolean connectAndDownload(final String server) {
         try {
+        	downloadChallenge(server);
             downloadManifest(server);
             downloadNextFile(server);
             return true;
@@ -54,6 +60,26 @@ public class SimpleHttpClient {
             LOGGER.error("Failed to download modpack from server: " + server, ex);
             return false;
         }
+    }
+    
+    protected void downloadChallenge(final String serverHost) throws IOException
+    {
+    	var address = serverHost + "/challenge";
+    	
+    	LOGGER.info("Requesting challenge from: " + serverHost);
+    	LaunchEnvironmentHandler.INSTANCE.addProgressMessage("Requesting Challenge from: " + serverHost);
+    	
+    	var url = new URL(address);
+        var connection = url.openConnection();
+        
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+        	final String challengeStr = in.readLine();
+        	LOGGER.info("Got Challenge {}", challengeStr);
+        	challenge = Base64.getDecoder().decode(challengeStr);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to download challenge", e);
+        }
+        LOGGER.debug("Received challenge");
     }
 
     protected void downloadManifest(final String serverHost) throws IOException
@@ -65,7 +91,7 @@ public class SimpleHttpClient {
 
         var url = new URL(address);
         var connection = url.openConnection();
-        this.connectionSecurityManager.onClientConnectionCreation(connection);
+        this.connectionSecurityManager.onClientConnectionCreation(connection, challenge);
 
         try (BufferedInputStream in = new BufferedInputStream(connection.getInputStream())) {
             this.serverManifest = ServerManifest.loadFromStream(in);
@@ -96,7 +122,7 @@ public class SimpleHttpClient {
         try
         {
             URLConnection connection = new URL(requestUri).openConnection();
-            this.connectionSecurityManager.onClientConnectionCreation(connection);
+            this.connectionSecurityManager.onClientConnectionCreation(connection, challenge);
 
             File file = outputDir.resolve(next.getFileName()).toFile();
 

@@ -27,13 +27,13 @@ public final class PasswordBasedSecurityManager implements IConnectionSecurityMa
     }
 
     @Override
-    public void onClientConnectionCreation(final URLConnection connection)
+    public void onClientConnectionCreation(final URLConnection connection, byte[] challenge/*unused here*/)
     {
         connection.setRequestProperty("Authentication", "Basic " + passwordHash);
     }
 
     @Override
-    public boolean onServerConnectionRequest(final FullHttpRequest msg)
+    public boolean onServerConnectionRequest(final FullHttpRequest msg, byte[] challenge/*unused here*/)
     {
         final String authHeader = msg.headers().get("Authentication");
         if (!authHeader.startsWith("Basic "))
@@ -83,4 +83,9 @@ public final class PasswordBasedSecurityManager implements IConnectionSecurityMa
             throw new IllegalStateException("Missing MD5 hashing algorithm", e);
         }
     }
+
+	@Override
+	public boolean requiresChallenge() {
+		return false;
+	}
 }

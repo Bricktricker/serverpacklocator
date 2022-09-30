@@ -199,9 +199,14 @@ public final class ProfileKeyPairBasedSecurityManager implements IConnectionSecu
     private static boolean validateSignedSessionId(final UUID sessionId, final SignatureValidator publicKeySignature, final byte[] encryptedSessionHashPayload) {
         return publicKeySignature.validate(buildMessageHashFromSignature(sessionId), encryptedSessionHashPayload);
     }
+    
+	@Override
+	public boolean requiresChallenge() {
+		return true;
+	}
 
     @Override
-    public void onClientConnectionCreation(final URLConnection connection)
+    public void onClientConnectionCreation(final URLConnection connection, byte[] challenge)
     {
         if (signingHandler == null || sessionId.compareTo(DEFAULT_NILL_UUID) == 0) {
             LOGGER.warn("No signing handler is available for the current session (Missing keypair). Stuff might not work since we can not sign the requests!");
@@ -214,10 +219,11 @@ public final class ProfileKeyPairBasedSecurityManager implements IConnectionSecu
         connection.setRequestProperty("AuthenticationKey", Base64.getEncoder().encodeToString(Crypt.rsaPublicKeyToString(signingHandler.keyPair().publicKeyData().key()).getBytes(StandardCharsets.UTF_8)));
         connection.setRequestProperty("AuthenticationKeyExpire", Base64.getEncoder().encodeToString(signingHandler.keyPair().publicKeyData().expiresAt().toString().getBytes(StandardCharsets.UTF_8)));
         connection.setRequestProperty("AuthenticationKeySignature", Base64.getEncoder().encodeToString(signingHandler.keyPair().publicKeyData().publicKeySignature()));
+        connection.setRequestProperty("ChallengeSignature", Base64.getEncoder().encodeToString(signingHandler.signer().sign(challenge)));
     }
 
     @Override
-    public boolean onServerConnectionRequest(final FullHttpRequest msg)
+    public boolean onServerConnectionRequest(final FullHttpRequest msg, byte[] challenge)
     {
         final var headers = msg.headers();
         final String authentication = headers.get("Authentication");
@@ -305,6 +311,19 @@ public final class ProfileKeyPairBasedSecurityManager implements IConnectionSecu
             LOGGER.warn("External client attempted login with a key signature which was not decode-able: " + authenticationKeySignature);
             return false;
         }
+        
+        final String challengeSignatureStr =  headers.get("ChallengeSignature");
+        if(challengeSignatureStr == null) {
+        	LOGGER.warn("External client attempted login without a nonce signature!");
+        	return false;
+        }
+        final byte[] challengeSignature;
+        try{
+        	challengeSignature = Base64.getDecoder().decode(challengeSignatureStr);	
+        } catch (Throwable throwable) {
+            LOGGER.warn("External client attempted login with a nonce signature which was not decode-able: " + challengeSignatureStr);
+            return false;
+        }
 
         final PublicKeyData keyData = new PublicKeyData(
                 publicKey,
@@ -316,6 +335,10 @@ public final class ProfileKeyPairBasedSecurityManager implements IConnectionSecu
             validatePublicKey(keyData, sessionId, validator);
             if (!validateSignedSessionId(sessionId, keyData.validator(), encryptedSessionHashPayload)) {
                 LOGGER.warn("External client attempted login with an invalid signature!");
+                return false;
+            }
+            if(!keyData.validator().validate(challenge, challengeSignature)) {
+            	LOGGER.warn("External client attempted login with an invalid challenge signature!");
                 return false;
             }
             if (!WhitelistVerificationHelper.getInstance().isAllowed(sessionId)) {

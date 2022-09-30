@@ -7,9 +7,11 @@ import java.net.URLConnection;
 
 public interface IConnectionSecurityManager
 {
-    void onClientConnectionCreation(URLConnection connection);
+    void onClientConnectionCreation(URLConnection connection, byte[] challenge);
 
-    boolean onServerConnectionRequest(FullHttpRequest msg);
+    boolean onServerConnectionRequest(FullHttpRequest msg, byte[] challenge);
+    
+    boolean requiresChallenge();
 
     default void validateConfiguration(FileConfig config) {
         //Default is no configuration needed.

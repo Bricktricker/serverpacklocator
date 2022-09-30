@@ -7,6 +7,8 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.*;
+import io.netty.util.AttributeKey;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -15,6 +17,8 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -22,6 +26,7 @@ class RequestHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
     private final ServerSidedPackHandler serverSidedPackHandler;
     private static final Logger LOGGER = LogManager.getLogger();
     private final IConnectionSecurityManager connectionSecurityManager;
+    private static final AttributeKey<byte[]> CHALLENGE_ATTRUBUTE_KEY = AttributeKey.newInstance("ClientNonce");
 
     RequestHandler(final ServerSidedPackHandler serverSidedPackHandler,final IConnectionSecurityManager connectionSecurityManager) {
         this.serverSidedPackHandler = serverSidedPackHandler;
@@ -37,13 +42,35 @@ class RequestHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
         }
     }
     private void handleGet(final ChannelHandlerContext ctx, final FullHttpRequest msg) {
+    	byte[] challenge = null;
+    	
+    	if (Objects.equals("/challenge", msg.uri())) {
+    		if(!ctx.channel().hasAttr(CHALLENGE_ATTRUBUTE_KEY) || ctx.channel().attr(CHALLENGE_ATTRUBUTE_KEY).get() == null) {
+        		challenge = new byte[16];
+        		new SecureRandom().nextBytes(challenge);
+        		ctx.channel().attr(CHALLENGE_ATTRUBUTE_KEY).set(challenge);
+        	}else {
+        		challenge = ctx.channel().attr(CHALLENGE_ATTRUBUTE_KEY).get();
+        	}
+    		buildReply(ctx, msg, HttpResponseStatus.OK, "text/plain", Base64.getEncoder().encodeToString(challenge));
+    		return;
+    	}
+    	
+    	if(this.connectionSecurityManager.requiresChallenge()) {
+    		challenge = ctx.channel().attr(CHALLENGE_ATTRUBUTE_KEY).get();
+    		if(challenge == null) {
+        		buildReply(ctx, msg, HttpResponseStatus.BAD_REQUEST, "text/plain", "Request challenge first");
+        		return;
+        	}
+    	}
+    	
         if (!msg.headers().contains("Authentication")) {
             LOGGER.warn("Received unauthenticated request.");
             build404(ctx, msg);
             return;
         }
 
-        if (!this.connectionSecurityManager.onServerConnectionRequest(msg)) {
+        if (!this.connectionSecurityManager.onServerConnectionRequest(msg, challenge)) {
             LOGGER.warn("Received unauthorized request.");
             build404(ctx, msg);
             return;
